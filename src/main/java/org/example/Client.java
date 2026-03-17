@@ -33,7 +33,7 @@ public class Client {
                         });
                     }
                 });
-        Channel channel = bootstrap.connect("localhost", 8080).channel();  //连接后拿到对应的Channel对象
+        Channel channel = bootstrap.connect("localhost", 8081).channel();  //连接后拿到对应的Channel对象
         //注意上面连接操作是异步的，调用之后会继续往下走，下面我们就正式编写客户端的数据发送代码了
         try(Scanner scanner = new Scanner(System.in)){    //还是和之前一样，扫了就发
             while (true) {

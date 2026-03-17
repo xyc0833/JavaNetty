@@ -10,12 +10,13 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.handler.codec.string.StringDecoder;
 
 import java.nio.charset.StandardCharsets;
 
 public class Server {
     public static void main(String[] args) {
-        EventLoopGroup bossGroup = new NioEventLoopGroup(), workerGroup = new NioEventLoopGroup(1);  //线程数先限制一下
+        EventLoopGroup bossGroup = new NioEventLoopGroup(), workerGroup = new NioEventLoopGroup();
         ServerBootstrap bootstrap = new ServerBootstrap();
         bootstrap
                 .group(bossGroup, workerGroup)   //指定事件循环组
@@ -24,18 +25,19 @@ public class Server {
                     @Override
                     protected void initChannel(SocketChannel channel) {
                         channel.pipeline()
+                                //解码器本质上也算是一种ChannelInboundHandlerAdapter，用于处理入站请求
+                                .addLast(new TestDecoder())   //当客户端发送来的数据只是简单的字符串转换的ByteBuf时，我们直接使用内置的StringDecoder即可转换
                                 .addLast(new ChannelInboundHandlerAdapter(){
                                     @Override
                                     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-                                        ByteBuf buf = (ByteBuf) msg;
-                                        System.out.println("接收到客户端发送的数据："+buf.toString(StandardCharsets.UTF_8));
-                                        Thread.sleep(10000);   //这里我们直接卡10秒假装在处理任务
-                                        ctx.writeAndFlush(Unpooled.wrappedBuffer("已收到！".getBytes()));
+                                        //经过StringDecoder转换后，msg直接就是一个字符串，所以打印就行了
+                                        System.out.println("收到客户端消息"+msg);
                                     }
                                 });
+
                     }
                 });
-        bootstrap.bind(8080);
+        bootstrap.bind(8081);
     }
 
 }
