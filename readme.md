@@ -172,3 +172,127 @@ promise.addListener(future -> {
 1. **Netty Future**：增强版 JDK Future，核心是「非阻塞回调」，只能读结果；
 2. **Netty Promise**：继承 Future，新增「写结果」能力，是生产/消费异步结果的完整模型；
 3. 核心关系：Promise 是可写的 Future，生产者用 Promise 设结果，消费者用 Future 拿结果。
+
+
+
+## 代码解析
+
+### 这段 Netty 代码完整解析
+先一句话总结核心功能：**这是 Netty 中用于检测 Channel 读写空闲状态的事件处理逻辑，当指定时间内没有写操作/读操作时，触发对应的提示输出**。
+
+#### 一、逐行解析代码
+```java
+@Override
+public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+    // 1. 判断触发的事件是否是「空闲状态事件」
+    if(evt instanceof IdleStateEvent){
+        // 2. 类型强转：将通用事件转为 Netty 专属的空闲状态事件
+        IdleStateEvent event = (IdleStateEvent) evt;
+        
+        // 3. 判断空闲类型：写空闲（WRITER_IDLE）
+        if(event.state() == IdleState.WRITER_IDLE){
+            // 写空闲：指定时间内没有向 Channel 写入/发送数据
+            System.out.println("好久都没写了，看视频的你真的有认真在跟着敲吗");
+        }
+        // 4. 判断空闲类型：读空闲（READER_IDLE）
+        else if(event.state() == IdleState.READER_IDLE) {
+            // 读空闲：指定时间内没有从 Channel 读取/接收数据
+            System.out.println("已经很久很久没有读事件发生了，好寂寞");
+        }
+    }
+}
+```
+
+#### 二、关键概念解释
+1. **方法重写（@Override）**
+   这个方法重写了 Netty `ChannelInboundHandlerAdapter` 中的 `userEventTriggered` 方法，该方法的作用是：**处理 Netty 触发的「用户自定义/框架内置的非 IO 事件」**（区别于 `channelRead` 处理读数据、`write` 处理写数据）。
+
+2. **IdleStateEvent（空闲状态事件）**
+   这是 Netty 内置的事件，需要配合 `IdleStateHandler` 使用（你这段代码的完整逻辑中，肯定在 ChannelPipeline 里添加了 `IdleStateHandler`），用于检测 Channel 的空闲状态：
+   - `IdleState.READER_IDLE`：读空闲 → 超过指定时间没有从 Channel 读取到数据（比如客户端很久没发消息给服务端）；
+   - `IdleState.WRITER_IDLE`：写空闲 → 超过指定时间没有向 Channel 写入数据（比如服务端很久没给客户端发消息）；
+   - 还有 `IdleState.ALL_IDLE`：读写都空闲（代码里没处理）。
+
+3. **核心逻辑流程**
+   ```mermaid
+   graph LR
+   A[Netty 检测到空闲事件] --> B[触发userEventTriggered方法]
+   B --> C{evt是否是IdleStateEvent?}
+   C -- 否 --> D[忽略该事件]
+   C -- 是 --> E{判断空闲类型}
+   E -- 写空闲 --> F[输出写空闲提示]
+   E -- 读空闲 --> G[输出读空闲提示]
+   ```
+
+#### 三、完整使用场景示例（补全上下文）
+为了让你理解更完整，给出这段代码的完整使用示例（包含 `IdleStateHandler` 的配置）：
+```java
+import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.*;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.handler.timeout.IdleStateEvent;
+import io.netty.handler.timeout.IdleStateHandler;
+
+import java.util.concurrent.TimeUnit;
+
+public class IdleStateDemo {
+    public static void main(String[] args) throws Exception {
+        NioEventLoopGroup boss = new NioEventLoopGroup(1);
+        NioEventLoopGroup worker = new NioEventLoopGroup();
+
+        try {
+            ServerBootstrap bootstrap = new ServerBootstrap();
+            bootstrap.group(boss, worker)
+                    .channel(NioServerSocketChannel.class)
+                    .childHandler(new ChannelInitializer<Channel>() {
+                        @Override
+                        protected void initChannel(Channel ch) throws Exception {
+                            ChannelPipeline pipeline = ch.pipeline();
+                            // 关键：添加空闲检测处理器
+                            // 参数说明：读空闲时间(5秒)、写空闲时间(3秒)、读写空闲时间(0，不检测)、时间单位
+                            pipeline.addLast(new IdleStateHandler(5, 3, 0, TimeUnit.SECONDS));
+                            // 添加自定义处理器，处理空闲事件
+                            pipeline.addLast(new MyIdleStateHandler());
+                        }
+                    });
+
+            ChannelFuture future = bootstrap.bind(8080).sync();
+            future.channel().closeFuture().sync();
+        } finally {
+            boss.shutdownGracefully();
+            worker.shutdownGracefully();
+        }
+    }
+
+    // 自定义处理器，包含你提供的代码
+    static class MyIdleStateHandler extends ChannelInboundHandlerAdapter {
+        @Override
+        public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+            if(evt instanceof IdleStateEvent){
+                IdleStateEvent event = (IdleStateEvent) evt;
+                if(event.state() == IdleState.WRITER_IDLE){
+                    System.out.println("好久都没写了，看视频的你真的有认真在跟着敲吗");
+                }else if(event.state() == IdleState.READER_IDLE) {
+                    System.out.println("已经很久很久没有读事件发生了，好寂寞");
+                }
+            }
+        }
+    }
+}
+```
+
+#### 四、实际运行效果
+- 当服务端 3 秒内没有向客户端写数据 → 触发 `WRITER_IDLE` → 输出「好久都没写了...」；
+- 当服务端 5 秒内没有从客户端读数据 → 触发 `READER_IDLE` → 输出「已经很久很久没有读事件...」；
+- 如果既没读也没写，只会触发先达到阈值的那个事件（比如 3 秒先到，先触发写空闲）。
+
+### 总结
+1. 核心功能：通过 `userEventTriggered` 处理 Netty 的空闲状态事件，区分读/写空闲并输出提示；
+2. 依赖条件：必须配合 `IdleStateHandler` 使用（指定空闲时间阈值），否则不会触发 `IdleStateEvent`；
+3. 应用场景：常用来检测客户端是否掉线（比如读空闲超时后关闭连接）、心跳检测等。
+
+## Java 和 Excel相关
+
+apache poi  和 easyexcel
+

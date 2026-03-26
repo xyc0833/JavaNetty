@@ -10,7 +10,14 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
+import io.netty.handler.codec.http.*;
 import io.netty.handler.codec.string.StringDecoder;
+import io.netty.handler.codec.string.StringEncoder;
+import io.netty.handler.logging.LogLevel;
+import io.netty.handler.logging.LoggingHandler;
+import io.netty.handler.timeout.IdleState;
+import io.netty.handler.timeout.IdleStateEvent;
 
 import java.nio.charset.StandardCharsets;
 
@@ -25,15 +32,34 @@ public class Server {
                     @Override
                     protected void initChannel(SocketChannel channel) {
                         channel.pipeline()
-                                //解码器本质上也算是一种ChannelInboundHandlerAdapter，用于处理入站请求
-                                .addLast(new TestDecoder())   //当客户端发送来的数据只是简单的字符串转换的ByteBuf时，我们直接使用内置的StringDecoder即可转换
+                                .addLast(new HttpRequestDecoder())   //Http请求解码器
+                                //搞一个聚合器，将内容聚合为一个FullHttpRequest，参数是最大内容长度
+                                .addLast(new HttpObjectAggregator(Integer.MAX_VALUE))
+                                //.addLast(new LoggingHandler(LogLevel.INFO))   //添加一个日志Handler，在请求到来时会自动打印相关日志
                                 .addLast(new ChannelInboundHandlerAdapter(){
                                     @Override
                                     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-                                        //经过StringDecoder转换后，msg直接就是一个字符串，所以打印就行了
-                                        System.out.println("收到客户端消息"+msg);
+                                        System.out.println("收到客户端的数据："+msg.getClass());  //看看是个啥类型
+                                        FullHttpRequest request = (FullHttpRequest) msg;
+                                        //请求进来了直接走解析
+                                        PageResolver resolver = PageResolver.getInstance();
+                                        ctx.channel().writeAndFlush(resolver.resolveResource(request.uri()));
+                                        ctx.channel().close();
                                     }
-                                });
+
+                                    @Override
+                                    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+                                        if(evt instanceof IdleStateEvent){
+                                            IdleStateEvent event = (IdleStateEvent) evt;
+                                            if(event.state() == IdleState.WRITER_IDLE){
+                                                System.out.println("好久都没写了，看视频的你真的有认真在跟着敲吗");
+                                            }else if(event.state() == IdleState.READER_IDLE) {
+                                                System.out.println("已经很久很久没有读事件发生了，好寂寞");
+                                            }
+                                        }
+                                    }
+                                })
+                                .addLast(new HttpResponseEncoder());   //响应记得也要编码后发送哦
 
                     }
                 });
